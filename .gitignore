@@ -1,3 +1,5 @@
 autoencoder/images
 autoencoder/logs
 autoencoder/*.csv
+.vscode
+*.pyc

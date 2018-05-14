@@ -1,110 +1,42 @@
 #!/usr/bin/env python
 
-"""TensorFlow MNIST AutoEncoder
-
-This is my attempt to write the autoencoder for MNIST by Andrej Karpathy using 
-ConvNetJS in TensorFlow. Mostly to get some more experience working in 
-Tensorflow.
-
-Sources:
-    - http://cs.stanford.edu/people/karpathy/convnetjs/demo/autoencoder.html
-    - https://www.tensorflow.org/get_started/mnist/pros
-
-Author: Gertjan van den Burg
-Date: Thu Oct 26 16:49:29 CEST 2017
-
-"""
-
 import numpy as np
 import tensorflow as tf
 
 from tensorflow.examples.tutorials.mnist import input_data
+from utils import add_noise
+from tf_utils import form_image_grid, weight_variable, bias_variable, fc_layer
 
 BATCH_SIZE = 50
 GRID_ROWS = 5
 GRID_COLS = 10
-USE_RELU = False
+USE_RELU = True
 
-def form_image_grid(input_tensor, grid_shape, image_shape, num_channels):
-    """Arrange a minibatch of images into a grid to form a single image.
-    Args:
-        input_tensor: Tensor. Minibatch of images to format, either 4D
-            ([batch size, height, width, num_channels]) or flattened
-            ([batch size, height * width * num_channels]).
-        grid_shape: Sequence of int. The shape of the image grid,
-            formatted as [grid_height, grid_width].
-        image_shape: Sequence of int. The shape of a single image,
-            formatted as [image_height, image_width].
-        num_channels: int. The number of channels in an image.
-    Returns:
-        Tensor representing a single image in which the input images have been
-        arranged into a grid.
-    Raises:
-        ValueError: The grid shape and minibatch size don't match, or the image
-            shape and number of channels are incompatible with the input tensor.
-    """
-    if grid_shape[0] * grid_shape[1] != int(input_tensor.get_shape()[0]):
-        raise ValueError('Grid shape incompatible with minibatch size.')
-    if len(input_tensor.get_shape()) == 2:
-        num_features = image_shape[0] * image_shape[1] * num_channels
-        if int(input_tensor.get_shape()[1]) != num_features:
-            raise ValueError('Image shape and number of channels incompatible with '
-                        'input tensor.')
-    elif len(input_tensor.get_shape()) == 4:
-        if (int(input_tensor.get_shape()[1]) != image_shape[0] or
-            int(input_tensor.get_shape()[2]) != image_shape[1] or
-            int(input_tensor.get_shape()[3]) != num_channels):
-            raise ValueError('Image shape and number of channels incompatible with '
-                        'input tensor.')
-    else:
-        raise ValueError('Unrecognized input tensor format.')
-    height, width = grid_shape[0] * image_shape[0], grid_shape[1] * image_shape[1]
-    input_tensor = tf.reshape(
-        input_tensor, grid_shape + image_shape + [num_channels])
-    input_tensor = tf.transpose(input_tensor, [0, 1, 3, 2, 4])
-    input_tensor = tf.reshape(
-        input_tensor, [grid_shape[0], width, image_shape[0], num_channels])
-    input_tensor = tf.transpose(input_tensor, [0, 2, 1, 3])
-    input_tensor = tf.reshape(
-        input_tensor, [1, height, width, num_channels])
-    return input_tensor
+L0_SIZE = 28*28
+L1_SIZE = 50
+L2_SIZE = 50
+LATENT_SIZE = 30
+N_BATCH = 200001
+NOISE = "mask-0.9"
 
-
-def weight_variable(shape):
-    # From the mnist tutorial
-    initial = tf.truncated_normal(shape, stddev=0.1)
-    return tf.Variable(initial)
-
-
-def bias_variable(shape):
-    initial = tf.constant(0.1, shape=shape)
-    return tf.Variable(initial)
-
-
-def fc_layer(previous, input_size, output_size):
-    W = weight_variable([input_size, output_size])
-    b = bias_variable([output_size])
-    return tf.matmul(previous, W) + b
-
-
-def autoencoder(x):
-    # first fully connected layer with 50 neurons using tanh activation
-    l1 = tf.nn.tanh(fc_layer(x, 28*28, 50))
+def autoencoder(x, x_original):
+    # first fully connected layer with L1_SIZE neurons using tanh activation
+    l1 = tf.nn.tanh(fc_layer(x, L0_SIZE, L1_SIZE))
     # second fully connected layer with 50 neurons using tanh activation
-    l2 = tf.nn.tanh(fc_layer(l1, 50, 50))
+    l2 = tf.nn.tanh(fc_layer(l1, L1_SIZE, L2_SIZE))
     # third fully connected layer with 2 neurons
-    l3 = fc_layer(l2, 50, 2)
+    l3 = fc_layer(l2, L2_SIZE, LATENT_SIZE)
     # fourth fully connected layer with 50 neurons and tanh activation
-    l4 = tf.nn.tanh(fc_layer(l3, 2, 50))
+    l4 = tf.nn.tanh(fc_layer(l3, LATENT_SIZE, L2_SIZE))
     # fifth fully connected layer with 50 neurons and tanh activation
-    l5 = tf.nn.tanh(fc_layer(l4, 50, 50))
+    l5 = tf.nn.tanh(fc_layer(l4, L2_SIZE, L1_SIZE))
     # readout layer
     if USE_RELU:
-        out = tf.nn.relu(fc_layer(l5, 50, 28*28))
+        out = tf.nn.relu(fc_layer(l5, L1_SIZE, L0_SIZE))
     else:
-        out = fc_layer(l5, 50, 28*28)
+        out = fc_layer(l5, L1_SIZE, L0_SIZE)
     # let's use an l2 loss on the output image
-    loss = tf.reduce_mean(tf.squared_difference(x, out))
+    loss = tf.reduce_mean(tf.squared_difference(x_original, out))
     return loss, out, l3
 
 
@@ -119,7 +51,7 @@ def create_summaries(loss, x, latent, output):
     writer = tf.summary.FileWriter("./logs")
     tf.summary.scalar("Loss", loss)
     layer_grid_summary("Input", x, [28, 28])
-    layer_grid_summary("Encoder", latent, [2, 1])
+    layer_grid_summary("Encoder", latent, [LATENT_SIZE, 1])
     layer_grid_summary("Output", output, [28, 28])
     return writer, tf.summary.merge_all()
 
@@ -167,10 +99,11 @@ def main():
     mnist = input_data.read_data_sets('/tmp/MNIST_data')
 
     # placeholders for the images
-    x = tf.placeholder(tf.float32, shape=[None, 784])
+    x = tf.placeholder(tf.float32, shape=[None, L0_SIZE])
+    x_original = tf.placeholder(tf.float32, shape=[None, L0_SIZE])
 
     # build the model
-    loss, output, latent = autoencoder(x)
+    loss, output, latent = autoencoder(x, x_original)
 
     # and we use the Adam Optimizer for training
     train_step = tf.train.AdamOptimizer(1e-4).minimize(loss)
@@ -178,16 +111,19 @@ def main():
     # We want to use Tensorboard to visualize some stuff
     writer, summary_op = create_summaries(loss, x, latent, output)
 
-    first_batch = mnist.train.next_batch(BATCH_SIZE)
+    first_batch = mnist.test.next_batch(BATCH_SIZE)
+    first_batch = (add_noise(first_batch[0], NOISE),first_batch[1])
 
     # Run the training loop
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         sess.run(make_image("images/input.jpg", x, [28, 28]), feed_dict={x : 
             first_batch[0]})
-        for i in range(int(200001)):
-            batch = mnist.train.next_batch(BATCH_SIZE)
-            feed = {x : batch[0]}
+        for i in range(int(N_BATCH)):
+            batch_original = mnist.train.next_batch(BATCH_SIZE)       
+            batch = (add_noise(batch_original[0], NOISE),batch_original[1])
+
+            feed = {x : batch[0], x_original: batch_original[0]}
             if i % 500 == 0:
                 summary, train_loss = sess.run([summary_op, loss], 
                         feed_dict=feed)
@@ -212,7 +148,7 @@ def main():
             fname = "latent_relu.csv"
         else:
             fname = "latent_default.csv"
-        np.savetxt(fname, pred)
+        np.savetxt(fname, pred, delimiter=",", fmt="%1.5f")
 
 
 if __name__ == '__main__':
