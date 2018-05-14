@@ -1,0 +1,3 @@
+autoencoder/images
+autoencoder/logs
+autoencoder/*.csv
