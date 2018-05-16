@@ -35,7 +35,7 @@ def autoencoder(x, x_original):
         out = tf.nn.relu(fc_layer(l5, L1_SIZE, L0_SIZE))
     else:
         out = fc_layer(l5, L1_SIZE, L0_SIZE)
-    # let's use an l2 loss on the output image
+    # let's use an l2 loss on the output image and the image WITHOUT noise
     loss = tf.reduce_mean(tf.squared_difference(x_original, out))
     return loss, out, l3
 
@@ -46,14 +46,6 @@ def layer_grid_summary(name, var, image_dims):
         GRID_COLS], image_dims, 1)
     return tf.summary.image(name, grid)
 
-
-def create_summaries(loss, x, latent, output):
-    writer = tf.summary.FileWriter("./logs")
-    tf.summary.scalar("Loss", loss)
-    layer_grid_summary("Input", x, [28, 28])
-    layer_grid_summary("Encoder", latent, [LATENT_SIZE, 1])
-    layer_grid_summary("Output", output, [28, 28])
-    return writer, tf.summary.merge_all()
 
 
 def make_image(name, var, image_dims):
@@ -99,6 +91,7 @@ def main():
     mnist = input_data.read_data_sets('/tmp/MNIST_data')
 
     # placeholders for the images
+    # x_original is the image without noise, and x with noise
     x = tf.placeholder(tf.float32, shape=[None, L0_SIZE])
     x_original = tf.placeholder(tf.float32, shape=[None, L0_SIZE])
 
@@ -109,46 +102,53 @@ def main():
     train_step = tf.train.AdamOptimizer(1e-4).minimize(loss)
 
     # We want to use Tensorboard to visualize some stuff
-    writer, summary_op = create_summaries(loss, x, latent, output)
 
-    first_batch = mnist.test.next_batch(BATCH_SIZE)
-    first_batch = (add_noise(first_batch[0], NOISE),first_batch[1])
+    ref_batch = mnist.train.next_batch(BATCH_SIZE)
+    ref_batch = (add_noise(ref_batch[0], NOISE),ref_batch[1])
 
     # Run the training loop
     with tf.Session() as sess:
+        tf.summary.scalar("Loss", loss)
+        layer_grid_summary("Original", x_original, [28, 28])
+        layer_grid_summary("Input", x, [28, 28])
+        layer_grid_summary("Output", output, [28, 28])
+        merged = tf.summary.merge_all()
+        writer_train = tf.summary.FileWriter("./logs/train",sess.graph)
+        writer_test = tf.summary.FileWriter("./logs/test",sess.graph)
+
         sess.run(tf.global_variables_initializer())
         sess.run(make_image("images/input.jpg", x, [28, 28]), feed_dict={x : 
-            first_batch[0]})
+            ref_batch[0]})
         for i in range(int(N_BATCH)):
-            batch_original = mnist.train.next_batch(BATCH_SIZE)       
-            batch = (add_noise(batch_original[0], NOISE),batch_original[1])
+                    
+            batch_original_train = mnist.train.next_batch(BATCH_SIZE)       
+            batch_train = (add_noise(batch_original_train[0], NOISE),batch_original_train[1])
+            feed_dict_train = {x : batch_train[0], x_original: batch_original_train[0]}
 
-            feed = {x : batch[0], x_original: batch_original[0]}
             if i % 500 == 0:
-                summary, train_loss = sess.run([summary_op, loss], 
-                        feed_dict=feed)
-                print("step %d, training loss: %g" % (i, train_loss))
 
-                writer.add_summary(summary, i)
-                writer.flush()
+                batch_original_test = mnist.test.next_batch(BATCH_SIZE)       
+                batch_test = (add_noise(batch_original_test[0], NOISE),batch_original_test[1])
+
+                feed_dict_test = {x : batch_test[0], x_original: batch_original_test[0]}
+                
+                summary_str_train, train_error = sess.run(fetches=[merged, loss], feed_dict=feed_dict_train)
+                summary_str_test,  test_error = sess.run(fetches=[merged, loss], feed_dict=feed_dict_test)
+                
+                print("step %d, train loss:%g, test loss: %g" % (i, train_error, test_error))
+
+                writer_train.add_summary(summary_str_train, i)
+                writer_test.add_summary(summary_str_test, i)
+                
+                writer_train.flush()
+                writer_test.flush()
+                
 
             if i % 1000 == 0:
                 sess.run(make_image("images/output_%06i.jpg" % i, output, [28, 
-                    28]), feed_dict={x : first_batch[0]})
+                    28]), feed_dict={x : ref_batch[0]})
 
-            train_step.run(feed_dict=feed)
-
-        # Save latent space
-        pred = sess.run(latent, feed_dict={x : mnist.test._images})
-        pred = np.asarray(pred)
-        pred = np.reshape(pred, (mnist.test._num_examples, 2))
-        labels = np.reshape(mnist.test._labels, (mnist.test._num_examples, 1))
-        pred = np.hstack((pred, labels))
-        if USE_RELU:
-            fname = "latent_relu.csv"
-        else:
-            fname = "latent_default.csv"
-        np.savetxt(fname, pred, delimiter=",", fmt="%1.5f")
+            train_step.run(feed_dict=feed_dict_train)
 
 
 if __name__ == '__main__':
