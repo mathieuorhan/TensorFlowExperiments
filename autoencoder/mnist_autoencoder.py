@@ -2,6 +2,11 @@
 
 import numpy as np
 import tensorflow as tf
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import seaborn as sns; sns.set()
+import os
+
 
 from tensorflow.examples.tutorials.mnist import input_data
 from utils import add_noise
@@ -15,9 +20,13 @@ USE_RELU = True
 L0_SIZE = 28*28
 L1_SIZE = 50
 L2_SIZE = 50
-LATENT_SIZE = 30
+LATENT_SIZE = 2
 N_BATCH = 200001
-NOISE = "mask-0.9"
+NOISE = "mask-0.0"
+NICE_NAME = "Autoencoder reconstruction with latent space of dimension 2"
+RUN_NAME = "autoencoder_dim2_reconstruct"
+os.makedirs("./logs/"+RUN_NAME+"/train")
+os.makedirs("./logs/"+RUN_NAME+"/test")
 
 def autoencoder(x, x_original):
     # first fully connected layer with L1_SIZE neurons using tanh activation
@@ -38,6 +47,22 @@ def autoencoder(x, x_original):
     # let's use an l2 loss on the output image and the image WITHOUT noise
     loss = tf.reduce_mean(tf.squared_difference(x_original, out))
     return loss, out, l3
+
+
+def acp(x, x_original):
+    # A linear autoencoder is equivalent to a PCA
+
+    # first fully connected layer, linear
+    l1 = fc_layer(x, L0_SIZE, LATENT_SIZE)
+
+    # readout layer
+    if USE_RELU:
+        out = tf.nn.relu(fc_layer(l1, LATENT_SIZE, L0_SIZE))
+    else:
+        out = fc_layer(l1, LATENT_SIZE, L0_SIZE)
+    # let's use an l2 loss on the output image and the image WITHOUT noise
+    loss = tf.reduce_mean(tf.squared_difference(x_original, out))
+    return loss, out, l1
 
 
 def layer_grid_summary(name, var, image_dims):
@@ -95,7 +120,7 @@ def main():
     x = tf.placeholder(tf.float32, shape=[None, L0_SIZE])
     x_original = tf.placeholder(tf.float32, shape=[None, L0_SIZE])
 
-    # build the model
+    # build the model (acp | autoencoder)
     loss, output, latent = autoencoder(x, x_original)
 
     # and we use the Adam Optimizer for training
@@ -113,8 +138,8 @@ def main():
         layer_grid_summary("Input", x, [28, 28])
         layer_grid_summary("Output", output, [28, 28])
         merged = tf.summary.merge_all()
-        writer_train = tf.summary.FileWriter("./logs/train",sess.graph)
-        writer_test = tf.summary.FileWriter("./logs/test",sess.graph)
+        writer_train = tf.summary.FileWriter("./logs/"+RUN_NAME+"/train",sess.graph)
+        writer_test = tf.summary.FileWriter("./logs/"+RUN_NAME+"/test",sess.graph)
 
         sess.run(tf.global_variables_initializer())
         sess.run(make_image("images/input.jpg", x, [28, 28]), feed_dict={x : 
@@ -144,11 +169,30 @@ def main():
                 writer_test.flush()
                 
 
-            if i % 1000 == 0:
+            """if i % 1000 == 0:
                 sess.run(make_image("images/output_%06i.jpg" % i, output, [28, 
                     28]), feed_dict={x : ref_batch[0]})
+            """
 
             train_step.run(feed_dict=feed_dict_train)
+
+        # Visualize latent space
+        if LATENT_SIZE==2:
+            pred = sess.run(latent, feed_dict={x : mnist.test._images})
+            pred = np.asarray(pred)
+            pred = np.reshape(pred, (mnist.test._num_examples, 2))
+            labels = np.reshape(mnist.test._labels, (mnist.test._num_examples, 1))
+
+            plt.figure(figsize=(4,4))
+            plt.subplot(111)
+            plt.title(NICE_NAME)
+            color_map = ListedColormap(sns.color_palette("hls", 10))
+            plt.scatter(pred[:5000,0], pred[:5000,1], c=labels[:5000], s=8, cmap=color_map)
+            plt.gca().get_xaxis().set_ticklabels([])
+            plt.gca().get_yaxis().set_ticklabels([])
+
+            plt.tight_layout()
+            plt.show()
 
 
 if __name__ == '__main__':

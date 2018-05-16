@@ -24,7 +24,7 @@ def add_noise(batch, noise_type):
         frac = float(noise_type.split('-')[1])
         temp = np.copy(batch)
         for i in temp:
-            n = np.random.choice(len(i), round(
+            n = np.random.choice(len(i), int(
                 frac * len(i)), replace=False)
             i[n] = 0
         return temp
